@@ -561,17 +561,18 @@ def create(vm_):
     host = data['node']       # host which we have received
     nodeType = data['technology']  # VM tech (Qemu / OpenVZ)
 
-    # Determine which IP to use in order of preference:
-    if 'ip_address' in vm_:
-        ip_address = str(vm_['ip_address'])
-    elif 'public_ips' in data:
-        ip_address = str(data['public_ips'][0])  # first IP
-    elif 'private_ips' in data:
-        ip_address = str(data['private_ips'][0])  # first IP
-    else:
-        raise SaltCloudExecutionFailure  # err.. not a good idea i reckon
+    if nodeType != 'qemu':
+        # Determine which IP to use in order of preference:
+        if 'ip_address' in vm_:
+            ip_address = str(vm_['ip_address'])
+        elif 'public_ips' in data:
+            ip_address = str(data['public_ips'][0])  # first IP
+        elif 'private_ips' in data:
+            ip_address = str(data['private_ips'][0])  # first IP
+        else:
+            raise SaltCloudExecutionFailure  # err.. not a good idea i reckon
 
-    log.debug('Using IP address {0}'.format(ip_address))
+        log.debug('Using IP address {0}'.format(ip_address))
 
     # wait until the vm has been created so we can start it
     if not wait_for_created(data['upid'], timeout=300):
@@ -586,6 +587,28 @@ def create(vm_):
     log.debug('Waiting for state "running" for vm {0} on {1}'.format(vmid, host))
     if not wait_for_state(vmid, 'running'):
         return {'Error': 'Unable to start {0}, command timed out'.format(name)}
+
+    # Early return for Qemu VMs as we don't have IP so can't SSH into it..
+    if nodeType == 'qemu':
+        ret = __utils__['cloud.bootstrap'](vm_, __opts__)
+
+        # Report success!
+        log.info('Created Cloud VM \'{0[name]}\''.format(vm_))
+        log.debug(
+            '\'{0[name]}\' VM creation details:\n{1}'.format(
+                vm_, pprint.pformat(data)
+            )
+        )
+
+        __utils__['cloud.fire_event'](
+            'event',
+            'created instance',
+            'salt/cloud/{0}/created'.format(vm_['name']),
+            args=__utils__['cloud.filter_event']('created', vm_, ['name', 'profile', 'provider', 'driver']),
+            sock_dir=__opts__['sock_dir'],
+        )
+
+        return ret
 
     ssh_username = config.get_cloud_config_value(
         'ssh_username', vm_, __opts__, default='root'
